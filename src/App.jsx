@@ -64,14 +64,8 @@ export default function App() {
 
   // 初始化强制深色模式类策略（修复部分环境无tailwindcss配置文件的情况）
   useEffect(() => {
-    const applyTwConfig = () => {
-      if (window.tailwind && window.tailwind.config) window.tailwind.config.darkMode = 'class';
-    };
-    applyTwConfig();
-    setTimeout(applyTwConfig, 500); // 确保在CDN加载后也能覆盖
-    const script = document.createElement('script');
-    script.innerHTML = `if (window.tailwind) window.tailwind.config = { darkMode: 'class' };`;
-    document.head.appendChild(script);
+    window.tailwind = window.tailwind || {};
+    window.tailwind.config = { darkMode: 'class' };
   }, []);
 
   // 初始化
@@ -98,13 +92,19 @@ export default function App() {
   // 主题控制
   useEffect(() => {
     const root = window.document.documentElement;
+    const body = document.body;
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const applyTheme = () => {
       let isDark = settings.theme === 'dark';
       if (settings.theme === 'auto') isDark = mediaQuery.matches;
+      
       root.classList.toggle('dark', isDark);
-      document.body.classList.toggle('dark', isDark);
-      root.style.colorScheme = isDark ? 'dark' : 'light';
+      body.classList.toggle('dark', isDark);
+      
+      // 核心修复：强行覆盖底层属性，对抗移动端浏览器(Edge/Brave)的网页强制深色模式
+      root.style.setProperty('color-scheme', isDark ? 'dark' : 'light', 'important');
+      root.style.setProperty('background-color', isDark ? '#111827' : '#f9fafb', 'important');
+      body.style.setProperty('background-color', isDark ? '#111827' : '#f9fafb', 'important');
     };
     applyTheme();
     mediaQuery.addEventListener('change', applyTheme);
@@ -317,7 +317,7 @@ export default function App() {
   const isAnswered = isMistakeMode ? !!sessionAnswers[currentQId] : (hasAnsweredCurrent || mode === 'study');
 
   return (
-    <div className="font-sans selection:bg-blue-100 dark:selection:bg-blue-900 overflow-hidden relative min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-300">
+    <div className="font-sans selection:bg-blue-100 dark:selection:bg-blue-900 overflow-hidden relative min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300">
       
       {/* 首页 */}
       {view === 'home' && (
@@ -389,8 +389,8 @@ export default function App() {
 
       {/* 刷题视图 */}
       {view === 'quiz' && currentQ && (
-        <div className="min-h-screen flex flex-col fixed inset-0 z-10 overflow-hidden bg-white dark:bg-gray-950 transition-colors duration-300">
-          <header className="p-4 flex items-center justify-between border-b dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur-md z-50">
+        <div className="min-h-screen flex flex-col fixed inset-0 z-10 overflow-hidden bg-white dark:bg-gray-900 transition-colors duration-300">
+          <header className="p-4 flex items-center justify-between border-b dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md z-50">
             <div className="flex items-center gap-3">
               <button onClick={() => setView('home')} className="p-2 dark:text-white active:scale-90 transition-transform"><ChevronLeft/></button>
               <div className="text-sm font-black dark:text-white line-clamp-1 max-w-[120px] uppercase tracking-tighter">{currentBank.name}</div>
@@ -499,7 +499,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="fixed bottom-0 inset-x-0 p-6 bg-gradient-to-t from-white dark:from-gray-950 via-white/80 dark:via-gray-950/80 pointer-events-none flex justify-center">
+          <div className="fixed bottom-0 inset-x-0 p-6 bg-gradient-to-t from-white dark:from-gray-900 via-white/80 dark:via-gray-900/80 pointer-events-none flex justify-center">
             <div className="w-full max-w-md flex gap-4 pointer-events-auto">
               <button onClick={() => navigate(-1)} disabled={currentIndex === 0} className="flex-1 py-5 bg-white dark:bg-gray-900 border dark:border-gray-800 rounded-3xl font-black shadow-xl shadow-black/5 dark:text-white disabled:opacity-20 transition-all uppercase tracking-tighter flex items-center justify-center gap-1 active:scale-95"><ChevronLeft className="w-5 h-5"/> 上一题</button>
               <button onClick={() => navigate(1)} disabled={currentIndex === questions.length - 1} className="flex-1 py-5 bg-blue-600 dark:bg-blue-700 text-white rounded-3xl font-black shadow-2xl shadow-blue-500/20 active:scale-95 disabled:opacity-20 transition-all uppercase tracking-tighter flex items-center justify-center gap-1">下一题 <ChevronRight className="w-5 h-5"/></button>
@@ -525,7 +525,7 @@ export default function App() {
 // --- 子组件 ---
 
 const Sidebar = ({ isDrawerOpen, setIsDrawerOpen, settings, setSettings, handleClearStats, showToast, importBackup, banks, stats, progress, setStats, setProgress }) => (
-  <div className={`fixed inset-y-0 right-0 w-80 bg-white dark:bg-gray-950 shadow-2xl z-[150] transform transition-transform duration-300 ease-in-out border-l dark:border-gray-800 ${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+  <div className={`fixed inset-y-0 right-0 w-80 bg-white dark:bg-gray-900 shadow-2xl z-[150] transform transition-transform duration-300 ease-in-out border-l dark:border-gray-800 ${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
     <div className="p-6 h-full flex flex-col">
       <div className="flex justify-between items-center mb-8"><h2 className="text-xl font-black dark:text-white flex items-center gap-2 tracking-tight"><Settings className="w-5 h-5"/> 系统配置</h2><button onClick={() => setIsDrawerOpen(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-full dark:text-white"><X/></button></div>
       <div className="flex-1 space-y-8 overflow-y-auto pr-1 no-scrollbar">
@@ -580,7 +580,7 @@ const AnswerSheet = ({ isSheetOpen, setIsSheetOpen, questions, currentIndex, set
   return (
     <div className={`fixed inset-0 z-[120] transition-all duration-300 ${isSheetOpen ? 'visible opacity-100' : 'invisible opacity-0'}`}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsSheetOpen(false)} />
-      <motion.div initial={{ y: '100%' }} animate={{ y: isSheetOpen ? 0 : '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }} className="absolute bottom-0 inset-x-0 bg-white dark:bg-gray-950 rounded-t-[3rem] p-8 max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border-t dark:border-gray-800">
+      <motion.div initial={{ y: '100%' }} animate={{ y: isSheetOpen ? 0 : '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }} className="absolute bottom-0 inset-x-0 bg-white dark:bg-gray-900 rounded-t-[3rem] p-8 max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border-t dark:border-gray-800">
         <div className="flex justify-between items-center mb-8 px-2"><h3 className="text-xl font-black dark:text-white uppercase italic tracking-tighter">进度概览</h3><button onClick={() => setIsSheetOpen(false)} className="p-3 bg-gray-50 dark:bg-gray-900 rounded-2xl dark:text-white active:scale-90 transition-all"><X/></button></div>
         <div ref={scrollContainerRef} className="flex-1 overflow-y-auto grid grid-cols-5 sm:grid-cols-8 gap-3 pb-10 pr-2 no-scrollbar scroll-smooth">
           {questions.map((q, i) => {
@@ -599,7 +599,7 @@ const AnswerSheet = ({ isSheetOpen, setIsSheetOpen, questions, currentIndex, set
               dot = isCorrectDot ? "bg-green-500 text-white shadow-lg" : "bg-red-500 text-white shadow-lg";
             }
             
-            return (<button id={`sheet-btn-${i}`} key={i} onClick={() => { setDirection(0); setCurrentIndex(i); setIsSheetOpen(false); resetTempStates(); }} className={`h-12 rounded-2xl text-[10px] font-black transition-all active:scale-90 ${dot} ${i === currentIndex ? 'ring-4 ring-blue-500 ring-offset-2 dark:ring-offset-gray-950' : ''}`}>{i + 1}</button>);
+            return (<button id={`sheet-btn-${i}`} key={i} onClick={() => { setDirection(0); setCurrentIndex(i); setIsSheetOpen(false); resetTempStates(); }} className={`h-12 rounded-2xl text-[10px] font-black transition-all active:scale-90 ${dot} ${i === currentIndex ? 'ring-4 ring-blue-500 ring-offset-2 dark:ring-offset-gray-900' : ''}`}>{i + 1}</button>);
           })}
         </div>
       </motion.div>
