@@ -64,6 +64,11 @@ export default function App() {
 
   // 初始化强制深色模式类策略（修复部分环境无tailwindcss配置文件的情况）
   useEffect(() => {
+    const applyTwConfig = () => {
+      if (window.tailwind && window.tailwind.config) window.tailwind.config.darkMode = 'class';
+    };
+    applyTwConfig();
+    setTimeout(applyTwConfig, 500); // 确保在CDN加载后也能覆盖
     const script = document.createElement('script');
     script.innerHTML = `if (window.tailwind) window.tailwind.config = { darkMode: 'class' };`;
     document.head.appendChild(script);
@@ -98,6 +103,7 @@ export default function App() {
       let isDark = settings.theme === 'dark';
       if (settings.theme === 'auto') isDark = mediaQuery.matches;
       root.classList.toggle('dark', isDark);
+      document.body.classList.toggle('dark', isDark);
       root.style.colorScheme = isDark ? 'dark' : 'light';
     };
     applyTheme();
@@ -142,15 +148,19 @@ export default function App() {
       Object.keys(prev).forEach(bankId => {
         newStats[bankId] = {};
         Object.keys(prev[bankId]).forEach(qId => {
-          if (prev[bankId][qId].everWrong) {
-            newStats[bankId][qId] = { correct: 0, total: 0, lastChoice: null, everWrong: true };
-          }
+          newStats[bankId][qId] = {
+            ...prev[bankId][qId],
+            lastChoice: null,
+            isLastCorrect: null,
+            answeredThisRound: false
+          };
         });
       });
       return newStats;
     });
     setProgress({});
-    showToast("记录已重置（错题已保留）");
+    setSessionAnswers({});
+    showToast("当前答题状态已清除（已保留次数与错题）");
   };
 
   const startQuiz = (bank, startMode, forcedIndex = null) => {
@@ -234,7 +244,7 @@ export default function App() {
 
     setStats(prev => {
       const bStats = prev[currentBank.id] || {};
-      const qS = bStats[q.id] || { correct: 0, total: 0, lastChoice: null, everWrong: false };
+      const qS = bStats[q.id] || { correct: 0, total: 0, lastChoice: null, isLastCorrect: null, answeredThisRound: false, everWrong: false };
       return { 
         ...prev, 
         [currentBank.id]: { 
@@ -243,6 +253,8 @@ export default function App() {
             correct: qS.correct + (isCorrect ? 1 : 0), 
             total: qS.total + 1, 
             lastChoice: choice,
+            isLastCorrect: isCorrect,
+            answeredThisRound: true,
             everWrong: !isCorrect ? true : qS.everWrong // 只要错一次，以后都是错题
           } 
         } 
@@ -300,7 +312,9 @@ export default function App() {
   const currentQId = currentQ?.id;
   const h = (stats[currentBank?.id] || {})[currentQId] || { total: 0, lastChoice: null };
   const isMistakeMode = mode === 'mistake' || mode === 'frequentMistake';
-  const isAnswered = isMistakeMode ? !!sessionAnswers[currentQId] : (h.total > 0 || mode === 'study');
+  
+  const hasAnsweredCurrent = h.answeredThisRound !== undefined ? h.answeredThisRound : h.total > 0;
+  const isAnswered = isMistakeMode ? !!sessionAnswers[currentQId] : (hasAnsweredCurrent || mode === 'study');
 
   return (
     <div className="font-sans selection:bg-blue-100 dark:selection:bg-blue-900 overflow-hidden relative min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-300">
@@ -534,9 +548,12 @@ const Sidebar = ({ isDrawerOpen, setIsDrawerOpen, settings, setSettings, handleC
         </section>
         <section className="space-y-3 pt-6 border-t dark:border-gray-800">
           <label className="w-full py-4 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 border border-indigo-100 dark:border-indigo-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all text-sm"><FileUp className="w-4 h-4"/> 导入备份<input type="file" className="hidden" accept=".json" onChange={importBackup} /></label>
-          <button onClick={handleClearStats} className="w-full py-4 bg-red-50 dark:bg-red-900/10 text-red-500 border border-red-100 dark:border-red-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 text-sm"><Eraser className="w-4 h-4"/> 清除做题记录 (保留错题)</button>
-          <button onClick={() => { if(window.confirm('确定清空所有数据(包含错题本)？')){ localStorage.clear(); window.location.reload(); } }} className="w-full py-3 text-gray-400 dark:text-gray-600 font-bold text-[10px] uppercase text-center">清空一切并重置APP</button>
-          <button onClick={() => { const d = { banks, stats, settings, progress }; const b = new Blob([JSON.stringify(d)], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download=`backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); }} className="w-full py-4 bg-gray-900 dark:bg-white text-white dark:text-black rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl"><Download className="w-4 h-4"/> 导出完整备份</button>
+          
+          <button onClick={() => { const d = { banks, stats, settings, progress }; const b = new Blob([JSON.stringify(d)], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download=`backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); }} className="w-full py-4 bg-gray-900 dark:bg-white text-white dark:text-black rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl text-sm"><Download className="w-4 h-4"/> 导出完整备份</button>
+          
+          <button onClick={handleClearStats} className="w-full py-4 mt-4 bg-orange-50 dark:bg-orange-900/10 text-orange-600 border border-orange-100 dark:border-orange-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 text-sm"><Eraser className="w-4 h-4"/> 清除当前答题状态 (保留做题次数与错题)</button>
+          
+          <button onClick={() => { if(window.confirm('确定清空所有数据(包含错题本与做题次数)？')){ localStorage.clear(); window.location.reload(); } }} className="w-full py-4 bg-red-50 dark:bg-red-900/10 text-red-500 border border-red-100 dark:border-red-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 text-sm"><Trash2 className="w-4 h-4"/> 清空一切并重置APP (清除所有记录)</button>
         </section>
       </div>
     </div>
@@ -571,12 +588,15 @@ const AnswerSheet = ({ isSheetOpen, setIsSheetOpen, questions, currentIndex, set
             const isMistakeMode = mode === 'mistake' || mode === 'frequentMistake';
             let dot = "bg-gray-50 dark:bg-gray-900 text-gray-400 border border-transparent dark:border-gray-800";
             
+            const hasAns = h?.answeredThisRound !== undefined ? h.answeredThisRound : h?.total > 0;
+
             if (isMistakeMode) {
               if (sessionAnswers[q.id]) {
                 dot = sessionAnswers[q.id].isCorrect ? "bg-green-500 text-white shadow-lg" : "bg-red-500 text-white shadow-lg";
               }
-            } else if (h?.total > 0) {
-              dot = h.correct >= h.total ? "bg-green-500 text-white shadow-lg" : "bg-red-500 text-white shadow-lg";
+            } else if (hasAns) {
+              const isCorrectDot = h?.isLastCorrect !== undefined ? h.isLastCorrect : (h.correct >= h.total && h.total > 0);
+              dot = isCorrectDot ? "bg-green-500 text-white shadow-lg" : "bg-red-500 text-white shadow-lg";
             }
             
             return (<button id={`sheet-btn-${i}`} key={i} onClick={() => { setDirection(0); setCurrentIndex(i); setIsSheetOpen(false); resetTempStates(); }} className={`h-12 rounded-2xl text-[10px] font-black transition-all active:scale-90 ${dot} ${i === currentIndex ? 'ring-4 ring-blue-500 ring-offset-2 dark:ring-offset-gray-950' : ''}`}>{i + 1}</button>);
