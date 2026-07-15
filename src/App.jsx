@@ -3,13 +3,12 @@ import {
   Settings, ChevronLeft, ChevronRight, Upload, Link as LinkIcon, 
   Trash2, BookOpen, Zap, RotateCcw, AlertCircle, Menu, X, 
   CheckCircle2, Download, Moon, Sun, Monitor, Type, Eraser, 
-  Copy, Check, Send, ThumbsUp, ThumbsDown, History, FileUp
+  Copy, Check, Send, ThumbsUp, ThumbsDown, History, FileUp, FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // --- 常量与版本号 ---
 const APP_ID = 'smart-quiz-v13';
-const APP_VERSION = 'v1.3.0'; 
 const DEFAULT_SETTINGS = {
   theme: 'auto', autoNext: true, unvisitedFirst: false, mistakeFirst: false, fontSize: 18, autoRemoveMistake: true
 };
@@ -32,9 +31,16 @@ const getLabelColor = (type) => {
     case '单选': return 'bg-blue-600';
     case '多选': return 'bg-indigo-600';
     case '判断': return 'bg-purple-600';
-    case '简答': return 'bg-gray-600';
+    case '简答': return 'bg-gray-650';
     default: return 'bg-blue-600';
   }
+};
+
+// 安全获取值，防止数字 0 丢失
+const getSafeValue = (val) => {
+  if (val === 0 || val === "0") return "0";
+  if (val === null || val === undefined) return "";
+  return val.toString().trim();
 };
 
 export default function App() {
@@ -48,7 +54,7 @@ export default function App() {
 
   const [stats, setStats] = useState({}); 
   const [progress, setProgress] = useState({}); 
-  const [sessionAnswers, setSessionAnswers] = useState({}); // 用于错题模式下当作新题做
+  const [sessionAnswers, setSessionAnswers] = useState({}); 
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
@@ -60,15 +66,32 @@ export default function App() {
   const [shortAnswerText, setShortAnswerText] = useState("");
   const [showShortResult, setShowShortResult] = useState(false);
 
-  const scrollRef = useRef(null);
+  // --- URL导入状态 ---
+  const [urlInput, setUrlInput] = useState('');
+  const [isUrlImportOpen, setIsUrlImportOpen] = useState(false);
 
-  // 初始化强制深色模式类策略（修复部分环境无tailwindcss配置文件的情况）
+  // --- Excel 题目转换及导入状态 ---
+  const [excelFile, setExcelFile] = useState(null);
+  const [excelWorkbook, setExcelWorkbook] = useState(null);
+  const [sheetNames, setSheetNames] = useState([]);
+  const [selectedSheets, setSelectedSheets] = useState([]);
+  const [headers, setHeaders] = useState([]);
+  const [mapping, setMapping] = useState({ title: '', answer: '', analysis: '', options: [] });
+
+  const scrollRef = useRef(null);
+  const isNavigatingRef = useRef(false); // 用于防止手机极速连击导致卡死或索引越界
+
+  // 动态加载 SheetJS (xlsx)
   useEffect(() => {
-    window.tailwind = window.tailwind || {};
-    window.tailwind.config = { darkMode: 'class' };
+    if (!window.XLSX) {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js';
+      script.async = true;
+      document.body.appendChild(script);
+    }
   }, []);
 
-  // 初始化
+  // 读取本地存储
   useEffect(() => {
     const savedBanks = localStorage.getItem(`${APP_ID}-banks`);
     const savedSettings = localStorage.getItem(`${APP_ID}-settings`);
@@ -81,7 +104,7 @@ export default function App() {
     if (savedProgress) setProgress(JSON.parse(savedProgress));
   }, []);
 
-  // 持久化
+  // 持久化数据
   useEffect(() => {
     localStorage.setItem(`${APP_ID}-banks`, JSON.stringify(banks));
     localStorage.setItem(`${APP_ID}-settings`, JSON.stringify(settings));
@@ -89,23 +112,36 @@ export default function App() {
     localStorage.setItem(`${APP_ID}-progress`, JSON.stringify(progress));
   }, [banks, settings, stats, progress]);
 
-  // 主题控制
+  // 完美修复深浅色渲染、背景与字体的双向硬核适配（通过切换 root 节点的 .dark 类）
   useEffect(() => {
     const root = window.document.documentElement;
     const body = document.body;
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    
     const applyTheme = () => {
       let isDark = settings.theme === 'dark';
       if (settings.theme === 'auto') isDark = mediaQuery.matches;
       
-      root.classList.toggle('dark', isDark);
-      body.classList.toggle('dark', isDark);
+      // 控制 Tailwind .dark 类，确保 dark: 前缀能 100% 正确匹配
+      if (isDark) {
+        root.classList.add('dark');
+        body.classList.add('dark');
+        root.style.setProperty('background-color', '#111827', 'important');
+        root.style.setProperty('color', '#f9fafb', 'important');
+        body.style.setProperty('background-color', '#111827', 'important');
+        body.style.setProperty('color', '#f9fafb', 'important');
+      } else {
+        root.classList.remove('dark');
+        body.classList.remove('dark');
+        root.style.setProperty('background-color', '#f9fafb', 'important');
+        root.style.setProperty('color', '#111827', 'important');
+        body.style.setProperty('background-color', '#f9fafb', 'important');
+        body.style.setProperty('color', '#111827', 'important');
+      }
       
-      // 核心修复：强行覆盖底层属性，对抗移动端浏览器(Edge/Brave)的网页强制深色模式
       root.style.setProperty('color-scheme', isDark ? 'dark' : 'light', 'important');
-      root.style.setProperty('background-color', isDark ? '#111827' : '#f9fafb', 'important');
-      body.style.setProperty('background-color', isDark ? '#111827' : '#f9fafb', 'important');
     };
+    
     applyTheme();
     mediaQuery.addEventListener('change', applyTheme);
     return () => mediaQuery.removeEventListener('change', applyTheme);
@@ -117,12 +153,158 @@ export default function App() {
   };
 
   const addBank = (filename, data) => {
-    const bankId = filename.replace('.json', '');
-    // 保障每个题都有唯一ID
+    const bankId = filename.replace('.json', '').replace('.xlsx', '').replace('.xls', '');
     const processedData = data.map((q, i) => ({ ...q, id: q.id || `q_${bankId}_${i}` }));
     const newBank = { id: bankId, name: bankId, data: processedData, count: processedData.length };
     setBanks(prev => [newBank, ...prev.filter(b => b.id !== bankId)]);
-    showToast(`导入题库成功`);
+    showToast(`导入 "${bankId}" 成功`);
+  };
+
+  // --- URL 导入函数 ---
+  const handleImportFromUrl = async () => {
+    if (!urlInput.trim()) {
+      showToast("请输入合法的题库 URL");
+      return;
+    }
+    showToast("正在获取在线题库...");
+    try {
+      const response = await fetch(urlInput.trim());
+      if (!response.ok) throw new Error("请求失败");
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        const urlObj = new URL(urlInput.trim());
+        const filename = urlObj.pathname.split('/').pop() || 'Online_Quiz';
+        addBank(filename.endsWith('.json') ? filename : `${filename}.json`, data);
+        setUrlInput('');
+        setIsUrlImportOpen(false);
+      } else {
+        showToast("格式不正确，需要是 JSON 数组");
+      }
+    } catch (err) {
+      showToast("无法加载题库，请检查 URL 或 CORS 跨域限制");
+    }
+  };
+
+  // --- Excel 解析函数 ---
+  const handleExcelUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!window.XLSX) {
+      showToast("解析库加载中，请稍候再试");
+      return;
+    }
+    setExcelFile(file);
+    const data = await file.arrayBuffer();
+    const wb = window.XLSX.read(data);
+    setExcelWorkbook(wb);
+    setSheetNames(wb.SheetNames);
+    setSelectedSheets(wb.SheetNames); // 默认全选
+    
+    // 初始化解析，默认不选，默认为空
+    setMapping({ title: '', answer: '', analysis: '', options: [] });
+  };
+
+  // 扫描工作表头
+  useEffect(() => {
+    if (!excelWorkbook || selectedSheets.length === 0) {
+      setHeaders([]);
+      return;
+    }
+    const headerSet = new Set();
+    selectedSheets.forEach(name => {
+      const sheet = excelWorkbook.Sheets[name];
+      if (!sheet || !sheet['!ref']) return;
+      const data = window.XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      if (data.length > 0) {
+        data[0].forEach(h => {
+          if (h !== null && h !== undefined) headerSet.add(h.toString().trim());
+        });
+      }
+    });
+    setHeaders(Array.from(headerSet));
+  }, [excelWorkbook, selectedSheets]);
+
+  // 构建统一题型解析数据
+  const parseExcelData = () => {
+    if (!excelWorkbook || selectedSheets.length === 0) {
+      showToast("请至少选择一个工作表");
+      return null;
+    }
+    if (!mapping.title || !mapping.answer) {
+      showToast("请配置题目和答案的映射列");
+      return null;
+    }
+
+    const result = [];
+    const timeBase = Date.now().toString(36);
+    let seq = 1;
+
+    selectedSheets.forEach(sheetName => {
+      const ws = excelWorkbook.Sheets[sheetName];
+      if (!ws) return;
+      const rows = window.XLSX.utils.sheet_to_json(ws);
+
+      rows.forEach(row => {
+        const titleStr = getSafeValue(row[mapping.title]);
+        if (!titleStr) return; // 跳过空行
+
+        const rawAns = getSafeValue(row[mapping.answer]);
+        const finalAns = rawAns.toUpperCase();
+        const qId = timeBase + seq.toString(36).padStart(3, '0');
+
+        // 解析选项（安全过滤空）
+        const optionsArr = (mapping.options || [])
+          .map(k => getSafeValue(row[k]))
+          .filter(v => v !== "");
+
+        const item = {
+          id: qId,
+          title: titleStr,
+          option: optionsArr,
+          answer: finalAns,
+          analysis: mapping.analysis ? getSafeValue(row[mapping.analysis]) : ""
+        };
+
+        result.push(item);
+        seq++;
+      });
+    });
+
+    return { result, timeBase };
+  };
+
+  // 导入到本地
+  const handleImportExcelToBank = () => {
+    const parsed = parseExcelData();
+    if (!parsed) return;
+    if (parsed.result.length === 0) return showToast("没有提取到有效题目");
+    
+    addBank(excelFile.name, parsed.result);
+    // 重置状态
+    setExcelFile(null);
+    setExcelWorkbook(null);
+  };
+
+  // 合并并导出本地 JSON
+  const handleExportExcelToJSON = () => {
+    const parsed = parseExcelData();
+    if (!parsed) return;
+    if (parsed.result.length === 0) return showToast("没有提取到有效题目");
+
+    const blob = new Blob([JSON.stringify(parsed.result, null, 4)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `questions_${parsed.timeBase}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showToast(`转换并导出 ${parsed.result.length} 条题目成功！`);
+    // 重置状态
+    setExcelFile(null);
+    setExcelWorkbook(null);
   };
 
   const importBackup = (e) => {
@@ -160,7 +342,7 @@ export default function App() {
     });
     setProgress({});
     setSessionAnswers({});
-    showToast("当前答题状态已清除（已保留次数与错题）");
+    showToast("状态已清除");
   };
 
   const startQuiz = (bank, startMode, forcedIndex = null) => {
@@ -171,7 +353,7 @@ export default function App() {
 
     setCurrentBank(bank);
     setMode(startMode);
-    setSessionAnswers({}); // 每次进入题库清空会话答题记录
+    setSessionAnswers({});
     let base = [...bank.data];
     const bankStats = stats[bank.id] || {};
 
@@ -195,13 +377,13 @@ export default function App() {
       }
     } else if (startMode === 'mistake') {
       base = base.filter(q => bankStats[q.id]?.everWrong);
-      if (base.length === 0) return showToast("暂无错题，好厉害！");
+      if (base.length === 0) return showToast("暂无错题");
     } else if (startMode === 'frequentMistake') {
       base = base.filter(q => {
         const s = bankStats[q.id];
         return s && s.total > 0 && ((s.total - s.correct) / s.total) > 0.4;
       });
-      if (base.length === 0) return showToast("暂无高频错题");
+      if (base.length === 0) return showToast("暂无常错题");
     }
 
     setQuestions(base);
@@ -219,15 +401,23 @@ export default function App() {
     if (scrollRef.current) scrollRef.current.scrollTo(0, 0);
   };
 
+  // 极速切换拦截机制
   const navigate = (step) => {
+    if (isNavigatingRef.current) return;
     const nextIdx = currentIndex + step;
     if (nextIdx >= 0 && nextIdx < questions.length) {
+      isNavigatingRef.current = true;
       setDirection(step); 
+      
+      setCurrentIndex(nextIdx);
+      resetTempStates();
+      if (mode === 'sequence') {
+        setProgress(prev => ({ ...prev, [currentBank.id]: nextIdx }));
+      }
+      
       setTimeout(() => {
-        setCurrentIndex(nextIdx);
-        resetTempStates();
-        if (mode === 'sequence') setProgress(prev => ({ ...prev, [currentBank.id]: nextIdx }));
-      }, 0);
+        isNavigatingRef.current = false;
+      }, 200);
     }
   };
 
@@ -255,7 +445,7 @@ export default function App() {
             lastChoice: choice,
             isLastCorrect: isCorrect,
             answeredThisRound: true,
-            everWrong: !isCorrect ? true : qS.everWrong // 只要错一次，以后都是错题
+            everWrong: !isCorrect ? true : qS.everWrong 
           } 
         } 
       };
@@ -268,7 +458,6 @@ export default function App() {
     const willRemove = isMistakeMode && isCorrect && settings.autoRemoveMistake;
 
     if (willRemove) {
-      // 从错题本除名
       setStats(prev => {
         const bStats = prev[currentBank.id] || {};
         const qS = bStats[q.id] || {};
@@ -280,7 +469,7 @@ export default function App() {
           const nextQs = prev.filter(item => item.id !== q.id);
           if (nextQs.length === 0) {
             setView('home');
-            showToast("错题已全部清空，太棒了！");
+            showToast("错题已清空");
           } else if (currentIndex >= nextQs.length) {
             setCurrentIndex(Math.max(0, nextQs.length - 1));
           }
@@ -297,7 +486,18 @@ export default function App() {
     const type = getQuestionType(q);
     let text = `[${type}] ${q.title}\n`;
     if (q.option?.length > 0) text += q.option.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n');
-    navigator.clipboard.writeText(text).then(() => showToast("已复制到剪贴板"));
+    
+    const tempTextarea = document.createElement('textarea');
+    tempTextarea.value = text;
+    document.body.appendChild(tempTextarea);
+    tempTextarea.select();
+    try {
+      document.execCommand('copy');
+      showToast("已复制到剪切板");
+    } catch (e) {
+      showToast("复制失败");
+    }
+    document.body.removeChild(tempTextarea);
   };
 
   const pageVariants = {
@@ -317,88 +517,197 @@ export default function App() {
   const isAnswered = isMistakeMode ? !!sessionAnswers[currentQId] : (hasAnsweredCurrent || mode === 'study');
 
   return (
-    <div className="font-sans selection:bg-blue-100 dark:selection:bg-blue-900 overflow-hidden relative min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300">
+    <div className="font-sans selection:bg-blue-100 dark:selection:bg-blue-900 overflow-hidden relative min-h-screen transition-colors duration-300 text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900">
       
       {/* 首页 */}
       {view === 'home' && (
         <div className="min-h-screen flex flex-col items-center p-6">
           <div className="w-full max-w-2xl">
-            <header className="flex justify-between items-start py-10">
+            <header className="flex justify-between items-center py-6">
               <div>
-                <h1 className="text-3xl font-black text-gray-900 dark:text-white tracking-tighter uppercase italic">Quiz Master</h1>
-                <p className="text-[10px] font-bold text-gray-400 mt-1 uppercase tracking-widest px-1 opacity-60">Version: {APP_VERSION}</p>
+                <h1 className="text-2xl font-black tracking-tight text-gray-950 dark:text-white flex items-center gap-2">
+                  <span>Quiz Master</span>
+                </h1>
               </div>
-              <button onClick={() => setIsDrawerOpen(true)} className="p-3 bg-white dark:bg-gray-900 rounded-2xl shadow-sm border dark:border-gray-800 active:scale-90 transition-all"><Settings className="dark:text-gray-300 w-6 h-6"/></button>
+              <button onClick={() => setIsDrawerOpen(true)} className="p-3 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 active:scale-95 transition-all text-gray-700 dark:text-gray-200">
+                <Settings className="w-5 h-5"/>
+              </button>
             </header>
 
             <div className="grid grid-cols-1 gap-6 pb-24">
-              <div className="bg-white dark:bg-gray-900 p-8 rounded-[2.5rem] shadow-sm border dark:border-gray-800 relative overflow-hidden group">
-                <h2 className="font-black text-gray-400 text-[10px] uppercase tracking-[0.2em] mb-4">库文件管理</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <label className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-gray-100 dark:border-gray-800 rounded-3xl hover:bg-blue-50 dark:hover:bg-blue-900/10 cursor-pointer transition-all group">
-                    <Upload className="w-8 h-8 text-blue-500 mb-2 group-hover:scale-110 transition-transform" />
-                    <span className="text-xs font-black text-gray-400 uppercase tracking-tighter">上传 JSON</span>
+              
+              {/* 题库快速导入面板 */}
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] shadow-sm border border-gray-100 dark:border-gray-700 relative overflow-hidden">
+                <h2 className="font-black text-gray-400 dark:text-gray-500 text-[10px] uppercase tracking-[0.15em] mb-4">题库快速导入</h2>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* 导入 JSON */}
+                  <label className="flex flex-col items-center justify-center p-5 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-3xl hover:bg-blue-50/50 dark:hover:bg-blue-900/10 cursor-pointer transition-all">
+                    <Upload className="w-7 h-7 text-blue-500 mb-2" />
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">JSON</span>
                     <input type="file" className="hidden" accept=".json" onChange={e => {
                       const f = e.target.files[0]; if(!f) return;
                       const r = new FileReader(); r.onload = ev => addBank(f.name, JSON.parse(ev.target.result)); r.readAsText(f);
                     }} />
                   </label>
-                  <div className="flex flex-col justify-center gap-3">
-                    <div className="relative">
-                      <LinkIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                      <input type="text" placeholder="URL 加载..." className="w-full pl-11 pr-4 py-4 bg-gray-50 dark:bg-gray-800 border-none rounded-2xl text-xs dark:text-white outline-none focus:ring-2 ring-blue-500 transition-all" onKeyDown={e => {
-                        if(e.key === 'Enter') { fetch(e.target.value).then(res => res.json()).then(data => addBank('网络题库', data)).catch(()=>showToast('解析失败')); }
-                      }} />
-                    </div>
-                  </div>
+
+                  {/* 导入 Excel */}
+                  <label className="flex flex-col items-center justify-center p-5 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-3xl hover:bg-green-50/50 dark:hover:bg-green-900/10 cursor-pointer transition-all">
+                    <FileSpreadsheet className="w-7 h-7 text-green-500 mb-2" />
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Excel</span>
+                    <input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleExcelUpload} />
+                  </label>
+
+                  {/* 导入 URL */}
+                  <button onClick={() => setIsUrlImportOpen(!isUrlImportOpen)} className="flex flex-col items-center justify-center p-5 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-3xl hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10 transition-all">
+                    <LinkIcon className="w-7 h-7 text-indigo-500 mb-2" />
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-300">URL</span>
+                  </button>
                 </div>
+
+                {/* 展开 URL 导入框 */}
+                {isUrlImportOpen && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 space-y-3">
+                    <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase block tracking-wide">请输入 JSON 链接</label>
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        placeholder="https://example.com/questions.json" 
+                        value={urlInput}
+                        onChange={e => setUrlInput(e.target.value)}
+                        className="flex-1 p-3 bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-700 rounded-xl text-xs outline-none text-gray-800 dark:text-white"
+                      />
+                      <button onClick={handleImportFromUrl} className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1">
+                        <Send className="w-3.5 h-3.5"/> 导入
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Excel 映射解析交互区 */}
+                {excelWorkbook && (
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-6 pt-6 border-t border-gray-100 dark:border-gray-700 space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-black text-gray-800 dark:text-white">Excel 解析配置 (v1.2.1)</span>
+                      <button onClick={() => setExcelWorkbook(null)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full text-gray-400"><X className="w-4 h-4"/></button>
+                    </div>
+                    
+                    {/* 工作表选取 */}
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1.5 block tracking-wide">包含的工作表</label>
+                      <div className="flex flex-wrap gap-2">
+                        {sheetNames.map(name => {
+                          const isChecked = selectedSheets.includes(name);
+                          return (
+                            <button key={name} onClick={() => {
+                              setSelectedSheets(prev => isChecked ? prev.filter(s => s !== name) : [...prev, name]);
+                            }} className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isChecked ? 'bg-green-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300'}`}>
+                              {name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 映射选择器 */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1 block">题目 (Title) *必选</label>
+                        <select value={mapping.title} onChange={e => setMapping(prev => ({...prev, title: e.target.value}))} className="w-full p-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-150 dark:border-gray-700 rounded-xl text-xs outline-none text-gray-805 dark:text-white">
+                          <option value="">-- 请选择 --</option>
+                          {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1 block">答案 (Answer) *必选</label>
+                        <select value={mapping.answer} onChange={e => setMapping(prev => ({...prev, answer: e.target.value}))} className="w-full p-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-150 dark:border-gray-700 rounded-xl text-xs outline-none text-gray-805 dark:text-white">
+                          <option value="">-- 请选择 --</option>
+                          {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1 block">解析 (Analysis) - 可选</label>
+                        <select value={mapping.analysis} onChange={e => setMapping(prev => ({...prev, analysis: e.target.value}))} className="w-full p-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-150 dark:border-gray-700 rounded-xl text-xs outline-none text-gray-805 dark:text-white">
+                          <option value="">-- 未配置 / 暂无 --</option>
+                          {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1 block">选项列 (Options) - 多选 (按住Ctrl/Cmd键)</label>
+                        <select multiple value={mapping.options} onChange={e => {
+                          const opts = Array.from(e.target.selectedOptions).map(o => o.value);
+                          setMapping(prev => ({...prev, options: opts}));
+                        }} className="w-full h-24 p-2 bg-gray-50 dark:bg-gray-900 border border-gray-150 dark:border-gray-700 rounded-xl text-xs outline-none text-gray-805 dark:text-white">
+                          {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 pt-2">
+                      <button onClick={handleImportExcelToBank} className="py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95">
+                        直接导入到本地库
+                      </button>
+                      <button onClick={handleExportExcelToJSON} className="py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95">
+                        合并并导出 JSON
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
               </div>
 
+              {/* 库列表区域 */}
               <div className="space-y-4">
-                <h2 className="font-black text-gray-400 text-[10px] uppercase tracking-[0.2em] px-2">本地仓库 ({banks.length})</h2>
+                <h2 className="font-black text-gray-400 dark:text-gray-500 text-[10px] uppercase tracking-[0.15em] px-2">本地仓库 ({banks.length})</h2>
                 {banks.map(bank => (
-                  <div key={bank.id} className="bg-white dark:bg-gray-900 p-6 rounded-[2.5rem] border dark:border-gray-800 hover:shadow-xl transition-all">
+                  <div key={bank.id} className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-5 px-1">
                       <div>
-                        <h3 className="font-black dark:text-white text-lg tracking-tight">{bank.name}</h3>
+                        <h3 className="font-black text-gray-900 dark:text-white text-lg tracking-tight">{bank.name}</h3>
                         <div className="flex gap-2 mt-1.5">
-                          <span className="text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 px-2 py-0.5 rounded-full font-bold uppercase">{bank.count} 题目</span>
-                          {progress[bank.id] > 0 && <span className="text-[10px] bg-blue-500 text-white px-2 py-0.5 rounded-full font-black uppercase shadow-lg shadow-blue-500/20">第 {progress[bank.id] + 1} 题</span>}
+                          <span className="text-[10px] bg-gray-100 dark:bg-gray-900 text-gray-500 dark:text-gray-400 px-2.5 py-0.5 rounded-full font-bold uppercase">{bank.count} 题目</span>
+                          {progress[bank.id] > 0 && <span className="text-[10px] bg-blue-500 text-white px-2.5 py-0.5 rounded-full font-black uppercase">上次：{progress[bank.id] + 1} / {bank.count}</span>}
                         </div>
                       </div>
-                      <button onClick={() => setBanks(prev => prev.filter(b => b.id !== bank.id))} className="p-2 text-gray-200 hover:text-red-500 transition-colors"><Trash2 className="w-5 h-5"/></button>
+                      <button onClick={() => setBanks(prev => prev.filter(b => b.id !== bank.id))} className="p-2 text-gray-300 hover:text-red-500 dark:hover:text-red-400 transition-colors"><Trash2 className="w-5 h-5"/></button>
                     </div>
                     <div className="grid grid-cols-5 gap-2">
                       {[
-                        { id: 'sequence', label: '顺序', style: 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' },
-                        { id: 'random', label: '乱序', style: 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600' },
-                        { id: 'study', label: '背题', style: 'bg-green-50 dark:bg-green-900/20 text-green-600' },
-                        { id: 'mistake', label: '错题', style: 'bg-red-50 dark:bg-red-900/20 text-red-500' },
-                        { id: 'frequentMistake', label: '常错', style: 'bg-orange-50 dark:bg-orange-900/20 text-orange-600' }
+                        { id: 'sequence', label: '顺序', style: 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400' },
+                        { id: 'random', label: '乱序', style: 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400' },
+                        { id: 'study', label: '背题', style: 'bg-green-50 dark:bg-green-950/40 text-green-600 dark:text-green-400' },
+                        { id: 'mistake', label: '错题', style: 'bg-red-50 dark:bg-red-950/40 text-red-500 dark:text-red-400' },
+                        { id: 'frequentMistake', label: '常错', style: 'bg-orange-50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400' }
                       ].map(m => (
-                        <button key={m.id} onClick={() => startQuiz(bank, m.id)} className={`py-3 text-[10px] font-black rounded-2xl transition-all active:scale-90 uppercase ${m.style}`}>{m.label}</button>
+                        <button key={m.id} onClick={() => startQuiz(bank, m.id)} className={`py-3 text-[10px] font-black rounded-2xl transition-all active:scale-95 uppercase ${m.style}`}>{m.label}</button>
                       ))}
                     </div>
                   </div>
                 ))}
+                
+                {banks.length === 0 && (
+                  <div className="text-center py-12 text-gray-400 dark:text-gray-500 text-sm">
+                    暂无本地题库，请在上方选择 JSON、Excel 文件，或者输入在线链接
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 刷题视图 */}
+      {/* 答题面板 */}
       {view === 'quiz' && currentQ && (
         <div className="min-h-screen flex flex-col fixed inset-0 z-10 overflow-hidden bg-white dark:bg-gray-900 transition-colors duration-300">
-          <header className="p-4 flex items-center justify-between border-b dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md z-50">
+          <header className="p-4 flex items-center justify-between border-b border-gray-100 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md z-50">
             <div className="flex items-center gap-3">
-              <button onClick={() => setView('home')} className="p-2 dark:text-white active:scale-90 transition-transform"><ChevronLeft/></button>
-              <div className="text-sm font-black dark:text-white line-clamp-1 max-w-[120px] uppercase tracking-tighter">{currentBank.name}</div>
+              <button onClick={() => setView('home')} className="p-2 dark:text-white active:scale-95 transition-transform"><ChevronLeft/></button>
+              {/* 已大幅度扩宽名字的最大显示尺寸以容纳长标题，并保障小屏幕上的优雅适配 */}
+              <div className="text-sm font-black dark:text-white line-clamp-1 max-w-[180px] sm:max-w-[360px] md:max-w-[440px] uppercase tracking-tight">{currentBank.name}</div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black bg-gray-100 dark:bg-gray-900 text-gray-500 px-3 py-1 rounded-full uppercase tracking-widest">{currentIndex + 1} / {questions.length}</span>
-              <button onClick={() => setIsSheetOpen(true)} className="p-2 bg-gray-50 dark:bg-gray-900 rounded-xl border dark:border-gray-800"><Menu className="w-5 h-5 dark:text-white"/></button>
-              <button onClick={() => setIsDrawerOpen(true)} className="p-2 bg-gray-50 dark:bg-gray-900 rounded-xl border dark:border-gray-800"><Settings className="w-5 h-5 dark:text-white"/></button>
+              <span className="text-[10px] font-black bg-gray-100 dark:bg-gray-950 text-gray-500 px-3 py-1 rounded-full uppercase tracking-wider">{currentIndex + 1} / {questions.length}</span>
+              <button onClick={() => setIsSheetOpen(true)} className="p-2 bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl text-gray-700 dark:text-gray-200"><Menu className="w-5 h-5"/></button>
+              <button onClick={() => setIsDrawerOpen(true)} className="p-2 bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl text-gray-700 dark:text-gray-200"><Settings className="w-5 h-5"/></button>
             </div>
           </header>
 
@@ -417,10 +726,10 @@ export default function App() {
                   dragConstraints={{ left: 0, right: 0 }}
                   dragElastic={0.1}
                   onDragEnd={(e, i) => { if(i.offset.x > 50) navigate(-1); else if(i.offset.x < -50) navigate(1); }}
-                  className="w-full p-6 pb-40 touch-pan-y"
+                  className="w-full p-6 pb-40 touch-pan-y animate-fadeIn"
                 >
                   <div className="max-w-2xl mx-auto">
-                    <motion.div whileTap={{ scale: 0.99 }} onClick={() => copyQuestion(currentQ)} className="font-black text-gray-900 dark:text-white leading-relaxed mb-10 cursor-pointer p-4 -m-4 rounded-3xl transition-all relative group" style={{ fontSize: `${settings.fontSize}px` }}>
+                    <motion.div whileTap={{ scale: 0.99 }} onClick={() => copyQuestion(currentQ)} className="font-black text-gray-900 dark:text-white leading-relaxed mb-8 cursor-pointer p-4 -m-4 rounded-3xl transition-all relative group" style={{ fontSize: `${settings.fontSize}px` }}>
                       <span className={`inline-block text-white text-[10px] px-2 py-0.5 rounded mr-3 align-middle font-black uppercase tracking-widest ${getLabelColor(getQuestionType(currentQ))}`}>
                         {getQuestionType(currentQ)}
                       </span>
@@ -430,7 +739,7 @@ export default function App() {
                     <div className="space-y-3.5">
                       {getQuestionType(currentQ) === '简答' ? (
                         <div className="space-y-4">
-                          <textarea value={shortAnswerText} onChange={e => setShortAnswerText(e.target.value)} disabled={isAnswered} placeholder="记录答案内容..." className="w-full h-48 p-6 bg-gray-50 dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-[2rem] text-sm focus:ring-2 ring-blue-500 transition-all dark:text-white resize-none shadow-inner" />
+                          <textarea value={shortAnswerText} onChange={e => setShortAnswerText(e.target.value)} disabled={isAnswered} placeholder="请在此输入您的答案..." className="w-full h-48 p-6 bg-gray-50 dark:bg-gray-950 border-2 border-gray-100 dark:border-gray-800 rounded-[2rem] text-sm focus:ring-2 ring-blue-500 transition-all dark:text-white resize-none shadow-inner" />
                           {!isAnswered && !showShortResult && (
                             <button onClick={() => setShowShortResult(true)} className="w-full py-5 bg-blue-600 text-white rounded-3xl font-black active:scale-95 shadow-lg shadow-blue-500/20 text-sm tracking-widest uppercase">查看参考解析</button>
                           )}
@@ -452,14 +761,14 @@ export default function App() {
 
                           const isCorrect = type === '多选' ? currentQ.answer.includes(char) : (type === '判断' ? opt === currentQ.answer : char === currentQ.answer);
 
-                          let cls = "bg-white dark:bg-gray-900 border-gray-100 dark:border-gray-800 text-gray-600 dark:text-gray-400 shadow-sm shadow-black/5";
-                          let circleCls = "border-gray-200 dark:border-gray-700 text-gray-400";
+                          let cls = "bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-300 shadow-sm shadow-black/5";
+                          let circleCls = "border-gray-200 dark:border-gray-700 text-gray-450 dark:text-gray-500";
                           
                           if (isAnswered) {
-                            if (isCorrect) { cls = "bg-green-50 dark:bg-green-900/20 border-green-500 text-green-700 dark:text-green-400"; circleCls = "bg-green-500 border-green-500 text-white"; }
-                            else if (isUserSelection) { cls = "bg-red-50 dark:bg-red-900/20 border-red-500 text-red-700 dark:text-red-400"; circleCls = "bg-red-500 border-red-500 text-white"; }
+                            if (isCorrect) { cls = "bg-green-50 dark:bg-green-950/30 border-green-500 text-green-700 dark:text-green-400"; circleCls = "bg-green-500 border-green-500 text-white"; }
+                            else if (isUserSelection) { cls = "bg-red-50 dark:bg-red-950/30 border-red-500 text-red-700 dark:text-red-400"; circleCls = "bg-red-500 border-red-500 text-white"; }
                           } else if (type === '多选' && multiSelect.includes(char)) {
-                            cls = "border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600"; circleCls = "bg-blue-500 border-blue-500 text-white";
+                            cls = "border-blue-500 bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-300"; circleCls = "bg-blue-500 border-blue-500 text-white";
                           }
 
                           return (
@@ -481,14 +790,14 @@ export default function App() {
                     </div>
 
                     {(isAnswered || showShortResult || mode === 'study') && (
-                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-10 p-8 bg-blue-50/50 dark:bg-blue-900/10 rounded-[2.5rem] border border-blue-100 dark:border-blue-900/30">
+                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-10 p-8 bg-blue-50/50 dark:bg-blue-950/20 rounded-[2.5rem] border border-blue-100 dark:border-blue-900/30">
                         <div className="text-blue-600 dark:text-blue-400 font-black mb-4 flex items-center gap-2 uppercase text-[10px] tracking-[0.3em]"><CheckCircle2 className="w-4 h-4"/> 题目解析</div>
                         <div className="text-gray-900 dark:text-white font-black mb-4 leading-tight" style={{ fontSize: `${settings.fontSize}px` }}>正确答案：{currentQ.answer}</div>
-                        {currentQ.analysis && <p className="text-sm text-gray-500 dark:text-gray-400 font-medium italic pt-4 border-t dark:border-gray-800/50 leading-relaxed">{currentQ.analysis}</p>}
+                        {currentQ.analysis && <p className="text-sm text-gray-500 dark:text-gray-400 font-medium italic pt-4 border-t border-gray-100 dark:border-gray-800/50 leading-relaxed">{currentQ.analysis}</p>}
                         {getQuestionType(currentQ) === '简答' && !isAnswered && (
                           <div className="mt-8 flex gap-3">
-                            <button onClick={() => handleAnswer(null, true)} className="flex-1 py-4 bg-green-500 text-white rounded-2xl font-black active:scale-95 shadow-xl shadow-green-500/20 flex items-center justify-center gap-2"><ThumbsUp className="w-4 h-4"/> 我做对了</button>
-                            <button onClick={() => handleAnswer(null, false)} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black active:scale-95 shadow-xl shadow-red-500/20 flex items-center justify-center gap-2"><ThumbsDown className="w-4 h-4"/> 我做错了</button>
+                            <button onClick={() => handleAnswer(null, true)} className="flex-1 py-4 bg-green-500 text-white rounded-2xl font-black active:scale-95 shadow-xl shadow-green-500/20 flex items-center justify-center gap-2"><ThumbsUp className="w-4 h-4"/> 做对了</button>
+                            <button onClick={() => handleAnswer(null, false)} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black active:scale-95 shadow-xl shadow-red-500/20 flex items-center justify-center gap-2"><ThumbsDown className="w-4 h-4"/> 做错了</button>
                           </div>
                         )}
                       </motion.div>
@@ -499,22 +808,33 @@ export default function App() {
             </div>
           </div>
 
+          {/* 底部导航栏：已补充完整的标准 Tailwind 黑暗类匹配 */}
           <div className="fixed bottom-0 inset-x-0 p-6 bg-gradient-to-t from-white dark:from-gray-900 via-white/80 dark:via-gray-900/80 pointer-events-none flex justify-center">
             <div className="w-full max-w-md flex gap-4 pointer-events-auto">
-              <button onClick={() => navigate(-1)} disabled={currentIndex === 0} className="flex-1 py-5 bg-white dark:bg-gray-900 border dark:border-gray-800 rounded-3xl font-black shadow-xl shadow-black/5 dark:text-white disabled:opacity-20 transition-all uppercase tracking-tighter flex items-center justify-center gap-1 active:scale-95"><ChevronLeft className="w-5 h-5"/> 上一题</button>
-              <button onClick={() => navigate(1)} disabled={currentIndex === questions.length - 1} className="flex-1 py-5 bg-blue-600 dark:bg-blue-700 text-white rounded-3xl font-black shadow-2xl shadow-blue-500/20 active:scale-95 disabled:opacity-20 transition-all uppercase tracking-tighter flex items-center justify-center gap-1">下一题 <ChevronRight className="w-5 h-5"/></button>
+              <button onClick={() => navigate(-1)} disabled={currentIndex === 0} className="flex-1 py-5 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-3xl font-black shadow-xl shadow-black/5 text-gray-700 dark:text-gray-200 disabled:opacity-20 transition-all uppercase tracking-tighter flex items-center justify-center gap-1 active:scale-95">
+                <ChevronLeft className="w-5 h-5"/> 上一题
+              </button>
+              <button onClick={() => navigate(1)} disabled={currentIndex === questions.length - 1} className="flex-1 py-5 bg-blue-600 dark:bg-blue-700 text-white rounded-3xl font-black shadow-2xl shadow-blue-500/20 active:scale-95 disabled:opacity-20 transition-all uppercase tracking-tighter flex items-center justify-center gap-1">
+                下一题 <ChevronRight className="w-5 h-5"/>
+              </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* 侧边设置菜单 */}
       <Sidebar isDrawerOpen={isDrawerOpen} setIsDrawerOpen={setIsDrawerOpen} settings={settings} setSettings={setSettings} handleClearStats={handleClearStats} showToast={showToast} importBackup={importBackup} banks={banks} stats={stats} progress={progress} setStats={setStats} setProgress={setProgress} />
+      
+      {/* 进度/答题板浮层 */}
       <AnswerSheet isSheetOpen={isSheetOpen} setIsSheetOpen={setIsSheetOpen} questions={questions} currentIndex={currentIndex} setCurrentIndex={setCurrentIndex} setDirection={setDirection} stats={stats} currentBank={currentBank} resetTempStates={resetTempStates} mode={mode} sessionAnswers={sessionAnswers} />
+      
+      {/* 恢复进度弹窗 */}
       <ResumePrompt resumeModal={resumeModal} setResumeModal={setResumeModal} startQuiz={startQuiz} />
 
+      {/* 轻提示 */}
       <AnimatePresence>
         {toast && (
-          <motion.div initial={{ y: -50, opacity: 0, x: '-50%' }} animate={{ y: 20, opacity: 1, x: '-50%' }} exit={{ y: -50, opacity: 0, x: '-50%' }} className="fixed top-4 left-1/2 -translate-x-1/2 z-[300] px-6 py-3 bg-gray-900/90 dark:bg-blue-600/90 backdrop-blur-md text-white rounded-full shadow-2xl flex items-center gap-2 text-[10px] font-black uppercase tracking-widest"><Check className="w-3 h-3 text-green-400" /> {toast}</motion.div>
+          <motion.div initial={{ y: -50, opacity: 0, x: '-50%' }} animate={{ y: 20, opacity: 1, x: '-50%' }} exit={{ y: -50, opacity: 0, x: '-50%' }} className="fixed top-4 left-1/2 -translate-x-1/2 z-[300] px-6 py-3 bg-gray-900/95 dark:bg-blue-600/95 backdrop-blur-md text-white rounded-full shadow-2xl flex items-center gap-2 text-[10px] font-black uppercase tracking-widest"><Check className="w-3 h-3 text-green-400" /> {toast}</motion.div>
         )}
       </AnimatePresence>
       {isDrawerOpen && <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[90] transition-opacity" onClick={() => setIsDrawerOpen(false)} />}
@@ -525,35 +845,75 @@ export default function App() {
 // --- 子组件 ---
 
 const Sidebar = ({ isDrawerOpen, setIsDrawerOpen, settings, setSettings, handleClearStats, showToast, importBackup, banks, stats, progress, setStats, setProgress }) => (
-  <div className={`fixed inset-y-0 right-0 w-80 bg-white dark:bg-gray-900 shadow-2xl z-[150] transform transition-transform duration-300 ease-in-out border-l dark:border-gray-800 ${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+  <div className={`fixed inset-y-0 right-0 w-80 bg-white dark:bg-gray-900 shadow-2xl z-[150] transform transition-transform duration-300 ease-in-out border-l border-gray-100 dark:border-gray-800 ${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
     <div className="p-6 h-full flex flex-col">
-      <div className="flex justify-between items-center mb-8"><h2 className="text-xl font-black dark:text-white flex items-center gap-2 tracking-tight"><Settings className="w-5 h-5"/> 系统配置</h2><button onClick={() => setIsDrawerOpen(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-900 rounded-full dark:text-white"><X/></button></div>
+      <div className="flex justify-between items-center mb-8">
+        <h2 className="text-xl font-black dark:text-white flex items-center gap-2 tracking-tight"><Settings className="w-5 h-5"/> 系统配置</h2>
+        <button onClick={() => setIsDrawerOpen(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full dark:text-white"><X/></button>
+      </div>
       <div className="flex-1 space-y-8 overflow-y-auto pr-1 no-scrollbar">
         <section>
           <label className="text-[10px] font-black text-gray-400 uppercase mb-3 block tracking-[0.2em]">视觉主题</label>
-          <div className="grid grid-cols-3 gap-2">{[ {id: 'light', icon: Sun, label: '浅色'}, {id: 'dark', icon: Moon, label: '深色'}, {id: 'auto', icon: Monitor, label: '自动'} ].map(t => (<button key={t.id} onClick={() => setSettings(s => ({...s, theme: t.id}))} className={`p-3 rounded-2xl border-2 flex flex-col items-center gap-1 transition-all ${settings.theme === t.id ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'border-gray-100 dark:border-gray-800 text-gray-400'}`}><t.icon className="w-4 h-4"/><span className="text-[10px] font-bold">{t.label}</span></button>))}</div>
+          <div className="grid grid-cols-3 gap-2">
+            {[ 
+              {id: 'light', icon: Sun, label: '浅色'}, 
+              {id: 'dark', icon: Moon, label: '深色'}, 
+              {id: 'auto', icon: Monitor, label: '自动'} 
+            ].map(t => (
+              <button 
+                key={t.id} 
+                onClick={() => setSettings(s => ({...s, theme: t.id}))} 
+                className={`p-3 rounded-2xl border-2 flex flex-col items-center gap-1 transition-all ${settings.theme === t.id ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300' : 'border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-800 text-gray-400'}`}
+              >
+                <t.icon className="w-4 h-4"/>
+                <span className="text-[10px] font-bold">{t.label}</span>
+              </button>
+            ))}
+          </div>
         </section>
+        
         <section className="space-y-4">
-          <label className="text-[10px] font-black text-gray-400 uppercase block tracking-[0.2em]">功能选项</label>
-          {[ { label: '答对自动跳转', key: 'autoNext' }, { label: '答对移出错题本', key: 'autoRemoveMistake' }, { label: '未做题置顶', key: 'unvisitedFirst' }, { label: '错题置顶', key: 'mistakeFirst' } ].map(item => (
-            <div key={item.key} className="flex justify-between items-center p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl border border-transparent dark:border-gray-800/50"><span className="text-sm font-bold dark:text-gray-200">{item.label}</span><button onClick={() => setSettings(s => ({...s, [item.key]: !s[item.key]}))} className={`w-10 h-5 rounded-full transition-colors relative ${settings[item.key] ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}><div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${settings[item.key] ? 'left-6' : 'left-1'}`} /></button></div>
+          <label className="text-[10px] font-black text-gray-400 block tracking-[0.2em] uppercase">功能选项</label>
+          {[ 
+            { label: '自动跳转', key: 'autoNext' }, 
+            { label: '自动移出错题', key: 'autoRemoveMistake' }, 
+            { label: '未做题置顶', key: 'unvisitedFirst' }, 
+            { label: '错题置顶', key: 'mistakeFirst' } 
+          ].map(item => (
+            <div key={item.key} className="flex justify-between items-center p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl border border-transparent dark:border-gray-700/60">
+              <span className="text-sm font-bold dark:text-gray-250 text-gray-700 dark:text-gray-200">{item.label}</span>
+              <button onClick={() => setSettings(s => ({...s, [item.key]: !s[item.key]}))} className={`w-10 h-5 rounded-full transition-colors relative ${settings[item.key] ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${settings[item.key] ? 'left-6' : 'left-1'}`} />
+              </button>
+            </div>
           ))}
         </section>
+
         <section>
           <label className="text-[10px] font-black text-gray-400 mb-3 block flex justify-between tracking-[0.2em] uppercase">文本字体 <span>{settings.fontSize}px</span></label>
           <div className="flex gap-3">
-            <button onClick={() => setSettings(s => ({...s, fontSize: Math.max(14, s.fontSize - 2)}))} className="flex-1 py-3 bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl font-black text-gray-600 dark:text-gray-300 active:scale-95 transition-all text-sm">A -</button>
-            <button onClick={() => setSettings(s => ({...s, fontSize: Math.min(30, s.fontSize + 2)}))} className="flex-1 py-3 bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl font-black text-gray-600 dark:text-gray-300 active:scale-95 transition-all text-sm">A +</button>
+            <button onClick={() => setSettings(s => ({...s, fontSize: Math.max(14, s.fontSize - 2)}))} className="flex-1 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl font-black text-gray-600 dark:text-gray-300 active:scale-95 transition-all text-sm">A -</button>
+            <button onClick={() => setSettings(s => ({...s, fontSize: Math.min(30, s.fontSize + 2)}))} className="flex-1 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl font-black text-gray-600 dark:text-gray-300 active:scale-95 transition-all text-sm">A +</button>
           </div>
         </section>
-        <section className="space-y-3 pt-6 border-t dark:border-gray-800">
-          <label className="w-full py-4 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 border border-indigo-100 dark:border-indigo-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all text-sm"><FileUp className="w-4 h-4"/> 导入备份<input type="file" className="hidden" accept=".json" onChange={importBackup} /></label>
+
+        <section className="space-y-3 pt-6 border-t border-gray-100 dark:border-gray-800">
+          <label className="w-full py-4 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900 rounded-2xl font-bold flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all text-sm">
+            <FileUp className="w-4 h-4"/> 恢复配置
+            <input type="file" className="hidden" accept=".json" onChange={importBackup} />
+          </label>
           
-          <button onClick={() => { const d = { banks, stats, settings, progress }; const b = new Blob([JSON.stringify(d)], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download=`backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); }} className="w-full py-4 bg-gray-900 dark:bg-white text-white dark:text-black rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl text-sm"><Download className="w-4 h-4"/> 导出完整备份</button>
+          <button onClick={() => { const d = { banks, stats, settings, progress }; const b = new Blob([JSON.stringify(d)], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download=`backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); }} className="w-full py-4 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-950 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl text-sm">
+            <Download className="w-4 h-4"/> 备份完整数据
+          </button>
           
-          <button onClick={handleClearStats} className="w-full py-4 mt-4 bg-orange-50 dark:bg-orange-900/10 text-orange-600 border border-orange-100 dark:border-orange-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 text-sm"><Eraser className="w-4 h-4"/> 清除当前答题状态 (保留做题次数与错题)</button>
+          <button onClick={handleClearStats} className="w-full py-4 bg-orange-50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400 border border-orange-100 dark:border-orange-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 text-sm">
+            <Eraser className="w-4 h-4"/> 重置作答统计
+          </button>
           
-          <button onClick={() => { if(window.confirm('确定清空所有数据(包含错题本与做题次数)？')){ localStorage.clear(); window.location.reload(); } }} className="w-full py-4 bg-red-50 dark:bg-red-900/10 text-red-500 border border-red-100 dark:border-red-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 text-sm"><Trash2 className="w-4 h-4"/> 清空一切并重置APP (清除所有记录)</button>
+          <button onClick={() => { if(window.confirm('确定清空所有本地数据？')){ localStorage.clear(); window.location.reload(); } }} className="w-full py-4 bg-red-50 dark:bg-red-950/20 text-red-500 dark:text-red-400 border border-red-100 dark:border-red-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 text-sm">
+            <Trash2 className="w-4 h-4"/> 重置整个应用
+          </button>
         </section>
       </div>
     </div>
@@ -563,7 +923,6 @@ const Sidebar = ({ isDrawerOpen, setIsDrawerOpen, settings, setSettings, handleC
 const AnswerSheet = ({ isSheetOpen, setIsSheetOpen, questions, currentIndex, setCurrentIndex, setDirection, stats, currentBank, resetTempStates, mode, sessionAnswers }) => {
   const scrollContainerRef = useRef(null);
   
-  // 自动居中当前题
   useEffect(() => {
     if (isSheetOpen) {
       const el = document.getElementById(`sheet-btn-${currentIndex}`);
@@ -580,13 +939,16 @@ const AnswerSheet = ({ isSheetOpen, setIsSheetOpen, questions, currentIndex, set
   return (
     <div className={`fixed inset-0 z-[120] transition-all duration-300 ${isSheetOpen ? 'visible opacity-100' : 'invisible opacity-0'}`}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsSheetOpen(false)} />
-      <motion.div initial={{ y: '100%' }} animate={{ y: isSheetOpen ? 0 : '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }} className="absolute bottom-0 inset-x-0 bg-white dark:bg-gray-900 rounded-t-[3rem] p-8 max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border-t dark:border-gray-800">
-        <div className="flex justify-between items-center mb-8 px-2"><h3 className="text-xl font-black dark:text-white uppercase italic tracking-tighter">进度概览</h3><button onClick={() => setIsSheetOpen(false)} className="p-3 bg-gray-50 dark:bg-gray-900 rounded-2xl dark:text-white active:scale-90 transition-all"><X/></button></div>
+      <motion.div initial={{ y: '100%' }} animate={{ y: isSheetOpen ? 0 : '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }} className="absolute bottom-0 inset-x-0 bg-white dark:bg-gray-900 rounded-t-[3rem] p-8 max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border-t border-gray-100 dark:border-gray-800">
+        <div className="flex justify-between items-center mb-8 px-2">
+          <h3 className="text-xl font-black dark:text-white uppercase italic tracking-tighter">进度概览</h3>
+          <button onClick={() => setIsSheetOpen(false)} className="p-3 bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-750 rounded-2xl text-gray-800 dark:text-white active:scale-90 transition-all"><X/></button>
+        </div>
         <div ref={scrollContainerRef} className="flex-1 overflow-y-auto grid grid-cols-5 sm:grid-cols-8 gap-3 pb-10 pr-2 no-scrollbar scroll-smooth">
           {questions.map((q, i) => {
             const h = (stats[currentBank?.id] || {})[q.id];
             const isMistakeMode = mode === 'mistake' || mode === 'frequentMistake';
-            let dot = "bg-gray-50 dark:bg-gray-900 text-gray-400 border border-transparent dark:border-gray-800";
+            let dot = "bg-gray-50 dark:bg-gray-850 text-gray-400 dark:text-gray-400 border border-transparent dark:border-gray-700/60";
             
             const hasAns = h?.answeredThisRound !== undefined ? h.answeredThisRound : h?.total > 0;
 
@@ -599,7 +961,16 @@ const AnswerSheet = ({ isSheetOpen, setIsSheetOpen, questions, currentIndex, set
               dot = isCorrectDot ? "bg-green-500 text-white shadow-lg" : "bg-red-500 text-white shadow-lg";
             }
             
-            return (<button id={`sheet-btn-${i}`} key={i} onClick={() => { setDirection(0); setCurrentIndex(i); setIsSheetOpen(false); resetTempStates(); }} className={`h-12 rounded-2xl text-[10px] font-black transition-all active:scale-90 ${dot} ${i === currentIndex ? 'ring-4 ring-blue-500 ring-offset-2 dark:ring-offset-gray-900' : ''}`}>{i + 1}</button>);
+            return (
+              <button 
+                id={`sheet-btn-${i}`} 
+                key={i} 
+                onClick={() => { setDirection(0); setCurrentIndex(i); setIsSheetOpen(false); resetTempStates(); }} 
+                className={`h-12 rounded-2xl text-[10px] font-black transition-all active:scale-90 ${dot} ${i === currentIndex ? 'ring-4 ring-blue-500 ring-offset-2 dark:ring-offset-gray-900' : ''}`}
+              >
+                {i + 1}
+              </button>
+            );
           })}
         </div>
       </motion.div>
@@ -625,12 +996,3 @@ const ResumePrompt = ({ resumeModal, setResumeModal, startQuiz }) => (
     )}
   </AnimatePresence>
 );
-
-// --- PWA Service Worker ---
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    const swCode = `self.addEventListener('install', e => self.skipWaiting()); self.addEventListener('fetch', e => e.respondWith(fetch(e.request)));`;
-    const blob = new Blob([swCode], { type: 'text/javascript' });
-    navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(() => {});
-  });
-}
